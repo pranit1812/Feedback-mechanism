@@ -55,12 +55,22 @@ def check_prerequisites():
 def build_docker_image():
     """Build the Docker image"""
     print("\nBuilding Docker image...")
-    result = run_command(f"docker build -t {CONTAINER_LABEL} .")
-    if not result and result != "":
-        print("Successfully built Docker image.")
-        return True
-    else:
-        print("Failed to build Docker image.")
+    try:
+        # Using subprocess.run with check=True to raise an exception if command fails
+        subprocess.run(f"docker build -t {CONTAINER_LABEL} .", shell=True, check=True, text=True)
+        # Verify image exists
+        result = run_command(f"docker images {CONTAINER_LABEL} -q")
+        if result:
+            print("Successfully built Docker image.")
+            return True
+        else:
+            print("Failed to verify Docker image after build.")
+            return False
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to build Docker image: {str(e)}")
+        return False
+    except Exception as e:
+        print(f"An error occurred during Docker build: {str(e)}")
         return False
 
 def create_iam_role():
@@ -163,7 +173,7 @@ def attach_role_to_service(role_arn):
     """Attach IAM role to container service"""
     print(f"\nAttaching role to container service...")
     result = run_command(f"aws lightsail set-container-service-role --service-name {SERVICE_NAME} --role-arn {role_arn}")
-    if not result and result != "":
+    if result is None:
         print(f"Successfully attached role {role_arn} to service.")
         return True
     else:
@@ -174,7 +184,7 @@ def deploy_container():
     """Deploy container to Lightsail service"""
     print("\nDeploying container to Lightsail...")
     result = run_command(f"aws lightsail create-container-service-deployment --service-name {SERVICE_NAME} --containers file://lightsail-container.json --public-endpoint file://lightsail-container.json")
-    if not result and result != "":
+    if result is None:
         print("Deployment initiated successfully.")
         return True
     else:
