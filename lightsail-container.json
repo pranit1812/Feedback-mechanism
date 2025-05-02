@@ -4,6 +4,9 @@
       "image": ":feedback-dashboard.latest.1",
       "ports": {
         "8501": "HTTP"
+      },
+      "environment": {
+        "AWS_REGION": "us-east-1"
       }
     }
   },

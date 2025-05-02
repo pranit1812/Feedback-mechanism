@@ -4,6 +4,10 @@ import json
 import plotly.express as px
 from datetime import datetime
 import os
+import boto3
+import traceback
+from decimal import Decimal
+from botocore.exceptions import ClientError
 
 # Set page config
 st.set_page_config(
@@ -16,29 +20,96 @@ st.set_page_config(
 if 'feedback_data' not in st.session_state:
     st.session_state.feedback_data = []
 
-# Function to save data to a JSON file
-def save_data_to_file():
-    data_dir = "data"
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
-    
-    with open(f"{data_dir}/feedback_data.json", "w") as f:
-        json.dump(st.session_state.feedback_data, f)
+# Function to get DynamoDB resource
+def get_dynamodb():
+    # Get AWS region from environment variable or use default
+    aws_region = os.environ.get("AWS_REGION", "us-east-1")
+    try:
+        # Create DynamoDB resource
+        return boto3.resource('dynamodb', region_name=aws_region)
+    except Exception as e:
+        st.error(f"Error connecting to DynamoDB: {str(e)}")
+        st.error(traceback.format_exc())
+        return None
 
-# Function to load data from a JSON file
-def load_data_from_file():
-    data_dir = "data"
-    file_path = f"{data_dir}/feedback_data.json"
+# Function to create table if it doesn't exist
+def ensure_table_exists():
+    dynamodb = get_dynamodb()
+    if not dynamodb:
+        return False
     
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r") as f:
-                st.session_state.feedback_data = json.load(f)
-        except json.JSONDecodeError:
-            st.error("Error loading data file. It might be corrupted.")
+    try:
+        # Check if table exists
+        existing_tables = [table.name for table in dynamodb.tables.all()]
+        if 'feedback' not in existing_tables:
+            # Create the feedback table
+            table = dynamodb.create_table(
+                TableName='feedback',
+                KeySchema=[
+                    {'AttributeName': 'id', 'KeyType': 'HASH'},  # Partition key
+                ],
+                AttributeDefinitions=[
+                    {'AttributeName': 'id', 'AttributeType': 'S'},
+                ],
+                ProvisionedThroughput={'ReadCapacityUnits': 5, 'WriteCapacityUnits': 5}
+            )
+            # Wait until the table exists
+            table.meta.client.get_waiter('table_exists').wait(TableName='feedback')
+            st.success("Created DynamoDB table: feedback")
+        return True
+    except Exception as e:
+        st.error(f"Error ensuring table exists: {str(e)}")
+        st.error(traceback.format_exc())
+        return False
 
-# Load data on app start
-load_data_from_file()
+# Function to load all feedback data from DynamoDB
+def load_data_from_dynamodb():
+    dynamodb = get_dynamodb()
+    if not dynamodb:
+        return []
+    
+    try:
+        table = dynamodb.Table('feedback')
+        response = table.scan()
+        items = response.get('Items', [])
+        
+        # Handle pagination if needed
+        while 'LastEvaluatedKey' in response:
+            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+            items.extend(response.get('Items', []))
+        
+        # Convert Decimal to float for JSON serialization
+        for item in items:
+            for key, value in item.items():
+                if isinstance(value, Decimal):
+                    item[key] = float(value)
+        
+        return items
+    except Exception as e:
+        st.error(f"Error loading data from DynamoDB: {str(e)}")
+        st.error(traceback.format_exc())
+        return []
+
+# Function to save data to DynamoDB
+def save_data_to_dynamodb(data):
+    dynamodb = get_dynamodb()
+    if not dynamodb:
+        return False
+    
+    try:
+        table = dynamodb.Table('feedback')
+        table.put_item(Item=data)
+        return True
+    except Exception as e:
+        st.error(f"Error saving data to DynamoDB: {str(e)}")
+        st.error(traceback.format_exc())
+        return False
+
+# Try to ensure the table exists on startup
+ensure_table_exists()
+
+# Load data from DynamoDB on app start
+st.session_state.feedback_data = load_data_from_dynamodb()
 
 # Streamlit UI
 st.title("Feedback Dashboard")
@@ -138,7 +209,7 @@ else:
 # We'll create a section to manually add test data or simulate POST requests
 
 st.header("API Integration")
-st.write("This dashboard is designed to receive data via POST requests. In a production environment, use the Streamlit API to handle incoming requests.")
+st.write("This dashboard is designed to receive data via POST requests to the API endpoint. Data will be stored in Amazon DynamoDB.")
 
 # For testing/simulation purposes
 with st.expander("Test Data Entry"):
@@ -179,14 +250,31 @@ with st.expander("Test Data Entry"):
                 if test_sentiment == "comment":
                     test_data["commentText"] = test_comment_text
                 
-                # Add to session state
-                st.session_state.feedback_data.append(test_data)
-                save_data_to_file()
-                st.success("Test data added successfully!")
-                st.experimental_rerun()
+                # Save to DynamoDB
+                if save_data_to_dynamodb(test_data):
+                    st.success("Test data added successfully to DynamoDB!")
+                    # Reload data
+                    st.session_state.feedback_data = load_data_from_dynamodb()
+                    st.experimental_rerun()
+                else:
+                    st.error("Failed to save test data to DynamoDB")
 
-# Clear data button (for testing)
-if st.sidebar.button("Clear All Data"):
-    st.session_state.feedback_data = []
-    save_data_to_file()
-    st.experimental_rerun() 
+# Refresh data button
+if st.sidebar.button("Refresh Data"):
+    st.session_state.feedback_data = load_data_from_dynamodb()
+    st.experimental_rerun()
+
+# AWS Connection Status
+with st.sidebar.expander("AWS Connection Status"):
+    dynamodb = get_dynamodb()
+    if dynamodb:
+        try:
+            # Try to list tables as a connection test
+            tables = list(dynamodb.tables.all())
+            table_names = [table.name for table in tables]
+            st.success("Connected to AWS DynamoDB")
+            st.write(f"Available tables: {', '.join(table_names) if table_names else 'None'}")
+        except Exception as e:
+            st.error(f"AWS connection error: {str(e)}")
+    else:
+        st.error("AWS DynamoDB connection not established") 
