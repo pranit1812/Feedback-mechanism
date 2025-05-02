@@ -5,6 +5,8 @@ import time
 import subprocess
 import boto3
 import sys
+import platform
+import urllib.request
 
 # Configuration
 AWS_REGION = "us-east-1"
@@ -22,6 +24,51 @@ def run_command(command):
         print(f"Error: {result.stderr}")
         return None
     return result.stdout.strip()
+
+def install_lightsail_plugin():
+    """Install Lightsail Control plugin"""
+    print("\nChecking and installing Lightsail Control plugin...")
+    
+    # Check if plugin is already installed
+    result = run_command("aws lightsail push-container-image --help")
+    if result and "lightsailctl" not in result:
+        system = platform.system().lower()
+        if system == "windows":
+            # For Windows
+            print("Installing Lightsail Control plugin for Windows...")
+            plugin_dir = os.path.expanduser("~\\.aws\\lightsailctl")
+            os.makedirs(plugin_dir, exist_ok=True)
+            
+            # Download plugin
+            plugin_url = "https://s3.us-west-2.amazonaws.com/lightsailctl/latest/windows-amd64/lightsailctl.exe"
+            plugin_path = os.path.join(plugin_dir, "lightsailctl.exe")
+            try:
+                urllib.request.urlretrieve(plugin_url, plugin_path)
+                print(f"Downloaded Lightsail Control plugin to: {plugin_path}")
+                return True
+            except Exception as e:
+                print(f"Failed to download Lightsail Control plugin: {str(e)}")
+                print("Please download manually from: https://lightsail.aws.amazon.com/ls/docs/en_us/articles/amazon-lightsail-install-software")
+                return False
+        elif system == "linux":
+            # For Linux
+            print("Installing Lightsail Control plugin for Linux...")
+            run_command("sudo curl https://s3.us-west-2.amazonaws.com/lightsailctl/latest/linux-amd64/lightsailctl -o /usr/local/bin/lightsailctl")
+            run_command("sudo chmod +x /usr/local/bin/lightsailctl")
+            return True
+        elif system == "darwin":
+            # For macOS
+            print("Installing Lightsail Control plugin for macOS...")
+            run_command("sudo curl https://s3.us-west-2.amazonaws.com/lightsailctl/latest/darwin-amd64/lightsailctl -o /usr/local/bin/lightsailctl")
+            run_command("sudo chmod +x /usr/local/bin/lightsailctl")
+            return True
+        else:
+            print(f"Unsupported operating system: {system}")
+            print("Please download manually from: https://lightsail.aws.amazon.com/ls/docs/en_us/articles/amazon-lightsail-install-software")
+            return False
+    else:
+        print("Lightsail Control plugin is already installed.")
+        return True
 
 def check_prerequisites():
     """Check if required tools are installed"""
@@ -222,6 +269,9 @@ def main():
         sys.exit(1)
     
     if not build_docker_image():
+        sys.exit(1)
+    
+    if not install_lightsail_plugin():
         sys.exit(1)
     
     role_arn = create_iam_role()
